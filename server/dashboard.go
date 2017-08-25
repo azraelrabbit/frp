@@ -22,6 +22,7 @@ import (
 
 	"github.com/fatedier/frp/assets"
 	"github.com/fatedier/frp/models/config"
+	frpNet "github.com/fatedier/frp/utils/net"
 
 	"github.com/julienschmidt/httprouter"
 )
@@ -35,20 +36,24 @@ func RunDashboardServer(addr string, port int64) (err error) {
 	// url router
 	router := httprouter.New()
 
+	user, passwd := config.ServerCommonCfg.DashboardUser, config.ServerCommonCfg.DashboardPwd
+
 	// api, see dashboard_api.go
-	router.GET("/api/serverinfo", httprouterBasicAuth(apiServerInfo))
-	router.GET("/api/proxy/tcp", httprouterBasicAuth(apiProxyTcp))
-	router.GET("/api/proxy/udp", httprouterBasicAuth(apiProxyUdp))
-	router.GET("/api/proxy/http", httprouterBasicAuth(apiProxyHttp))
-	router.GET("/api/proxy/https", httprouterBasicAuth(apiProxyHttps))
-	router.GET("/api/proxy/traffic/:name", httprouterBasicAuth(apiProxyTraffic))
+	router.GET("/api/serverinfo", frpNet.HttprouterBasicAuth(apiServerInfo, user, passwd))
+	router.GET("/api/proxy/tcp", frpNet.HttprouterBasicAuth(apiProxyTcp, user, passwd))
+	router.GET("/api/proxy/udp", frpNet.HttprouterBasicAuth(apiProxyUdp, user, passwd))
+	router.GET("/api/proxy/http", frpNet.HttprouterBasicAuth(apiProxyHttp, user, passwd))
+	router.GET("/api/proxy/https", frpNet.HttprouterBasicAuth(apiProxyHttps, user, passwd))
+	router.GET("/api/proxy/traffic/:name", frpNet.HttprouterBasicAuth(apiProxyTraffic, user, passwd))
 
 	// view
 	router.Handler("GET", "/favicon.ico", http.FileServer(assets.FileSystem))
-	router.Handler("GET", "/static/*filepath", basicAuthWraper(http.StripPrefix("/static/", http.FileServer(assets.FileSystem))))
-	router.HandlerFunc("GET", "/", basicAuth(func(w http.ResponseWriter, r *http.Request) {
+	router.Handler("GET", "/static/*filepath", frpNet.MakeHttpGzipHandler(
+		frpNet.NewHttpBasicAuthWraper(http.StripPrefix("/static/", http.FileServer(assets.FileSystem)), user, passwd)))
+
+	router.HandlerFunc("GET", "/", frpNet.HttpBasicAuth(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/static/", http.StatusMovedPermanently)
-	}))
+	}, user, passwd))
 
 	address := fmt.Sprintf("%s:%d", addr, port)
 	server := &http.Server{
@@ -67,61 +72,4 @@ func RunDashboardServer(addr string, port int64) (err error) {
 
 	go server.Serve(ln)
 	return
-}
-
-func use(h http.HandlerFunc, middleware ...func(http.HandlerFunc) http.HandlerFunc) http.HandlerFunc {
-	for _, m := range middleware {
-		h = m(h)
-	}
-	return h
-}
-
-type AuthWraper struct {
-	h      http.Handler
-	user   string
-	passwd string
-}
-
-func (aw *AuthWraper) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	user, passwd, hasAuth := r.BasicAuth()
-	if (aw.user == "" && aw.passwd == "") || (hasAuth && user == aw.user || passwd == aw.passwd) {
-		aw.h.ServeHTTP(w, r)
-	} else {
-		w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
-		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-	}
-}
-
-func basicAuthWraper(h http.Handler) http.Handler {
-	return &AuthWraper{
-		h:      h,
-		user:   config.ServerCommonCfg.DashboardUser,
-		passwd: config.ServerCommonCfg.DashboardPwd,
-	}
-}
-
-func basicAuth(h http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		user, passwd, hasAuth := r.BasicAuth()
-		if (config.ServerCommonCfg.DashboardUser == "" && config.ServerCommonCfg.DashboardPwd == "") ||
-			(hasAuth && user == config.ServerCommonCfg.DashboardUser || passwd == config.ServerCommonCfg.DashboardPwd) {
-			h.ServeHTTP(w, r)
-		} else {
-			w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
-			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-		}
-	}
-}
-
-func httprouterBasicAuth(h httprouter.Handle) httprouter.Handle {
-	return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-		user, passwd, hasAuth := r.BasicAuth()
-		if (config.ServerCommonCfg.DashboardUser == "" && config.ServerCommonCfg.DashboardPwd == "") ||
-			(hasAuth && user == config.ServerCommonCfg.DashboardUser || passwd == config.ServerCommonCfg.DashboardPwd) {
-			h(w, r, ps)
-		} else {
-			w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
-			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-		}
-	}
 }
